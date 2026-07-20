@@ -97,7 +97,10 @@ async function main() {
         `select t.id, t.subject, t.subject_type, t.vehicle_plate, t.last_message_at,
                 (select tm.body from public.thread_messages tm
                  where tm.thread_id = t.id and coalesce(tm.is_admin, false) = false
-                 order by tm.created_at desc limit 1) as last_client_msg
+                 order by tm.created_at desc limit 1) as last_client_msg,
+                (select tm.id from public.thread_messages tm
+                 where tm.thread_id = t.id and coalesce(tm.is_admin, false) = false
+                 order by tm.created_at desc limit 1) as last_client_msg_id
          from public.message_threads t
          where t.unread_for_admin = true
          order by t.last_message_at desc nulls last`
@@ -107,10 +110,16 @@ async function main() {
     await client.end().catch(() => {});
   }
 
+  // Threads are keyed by thread_id + latest client message id, not thread_id
+  // alone: unread_for_admin is a single boolean per thread (set by a trigger
+  // that never resets while unread), so a second new message on a thread the
+  // admin hasn't read yet would otherwise look identical to the first.
+  const threadKey = (t) => `${t.id}:${t.last_client_msg_id ?? ""}`;
+
   const curOrderIds = orders.map((o) => o.id);
   const curDep = deposits.map((d) => d.id);
   const curWd = withdrawals.map((w) => w.id);
-  const curThr = threads.map((t) => t.id);
+  const curThr = threads.map(threadKey);
 
   // First run: baseline everything, alert nothing.
   if (!state.initialized) {
@@ -133,7 +142,7 @@ async function main() {
   const newOrders = orders.filter((o) => !alertedOrders.has(o.id));
   const newDeposits = deposits.filter((d) => !alertedDep.has(d.id));
   const newWithdrawals = withdrawals.filter((w) => !alertedWd.has(w.id));
-  const newThreads = threads.filter((t) => !alertedThr.has(t.id));
+  const newThreads = threads.filter((t) => !alertedThr.has(threadKey(t)));
 
   // Persist updated state (current actionable sets). No lastRun -> file only
   // changes when a set changes, so the workflow commits only on real activity.
