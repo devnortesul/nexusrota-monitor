@@ -9,11 +9,12 @@
 //   - State lives in ./state/ops.json inside the repo; the workflow commits it
 //     back only when the actionable sets actually change (no lastRun => no noise).
 //
-// Four signals:
+// Five signals:
 //   1. report_orders      -> order reached status='processing' (paid, produce report)
 //   2. wallet_transactions-> deposit pending manual confirmation (type=deposit, status=pending)
 //   3. withdrawal_requests-> withdrawal waiting to be processed (processed_at null, not closed)
 //   4. message_threads    -> client message unread for admin (unread_for_admin=true)
+//   5. profiles           -> new client signup (excludes admin/master/localizador accounts)
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -64,7 +65,7 @@ async function main() {
   });
   await client.connect();
 
-  let orders, deposits, withdrawals, threads;
+  let orders, deposits, withdrawals, threads, newClients;
   try {
     orders = (
       await client.query(
@@ -106,6 +107,18 @@ async function main() {
          order by t.last_message_at desc nulls last`
       )
     ).rows;
+    newClients = (
+      await client.query(
+        `select p.id, p.full_name, p.requestor_type::text as requestor_type, p.created_at
+         from public.profiles p
+         where not exists (select 1 from public.admin_users au where au.user_id = p.user_id)
+           and not exists (
+             select 1 from public.user_roles ur
+             where ur.user_id = p.user_id and ur.role in ('admin','master','localizador')
+           )
+         order by p.created_at desc`
+      )
+    ).rows;
   } finally {
     await client.end().catch(() => {});
   }
@@ -120,6 +133,7 @@ async function main() {
   const curDep = deposits.map((d) => d.id);
   const curWd = withdrawals.map((w) => w.id);
   const curThr = threads.map(threadKey);
+  const curClients = newClients.map((c) => c.id);
 
   // First run: baseline everything, alert nothing.
   if (!state.initialized) {
@@ -129,6 +143,7 @@ async function main() {
       tx_alerted: curDep,
       wd_alerted: curWd,
       thread_alerted: curThr,
+      client_alerted: curClients,
     });
     console.log("baseline established, no alert");
     return;
@@ -138,11 +153,13 @@ async function main() {
   const alertedDep = new Set(arr(state.tx_alerted));
   const alertedWd = new Set(arr(state.wd_alerted));
   const alertedThr = new Set(arr(state.thread_alerted));
+  const alertedClients = new Set(arr(state.client_alerted));
 
   const newOrders = orders.filter((o) => !alertedOrders.has(o.id));
   const newDeposits = deposits.filter((d) => !alertedDep.has(d.id));
   const newWithdrawals = withdrawals.filter((w) => !alertedWd.has(w.id));
   const newThreads = threads.filter((t) => !alertedThr.has(threadKey(t)));
+  const newSignups = newClients.filter((c) => !alertedClients.has(c.id));
 
   // Persist updated state (current actionable sets). No lastRun -> file only
   // changes when a set changes, so the workflow commits only on real activity.
@@ -152,9 +169,10 @@ async function main() {
     tx_alerted: curDep,
     wd_alerted: curWd,
     thread_alerted: curThr,
+    client_alerted: curClients,
   });
 
-  const total = newOrders.length + newDeposits.length + newWithdrawals.length + newThreads.length;
+  const total = newOrders.length + newDeposits.length + newWithdrawals.length + newThreads.length + newSignups.length;
   if (total === 0) {
     console.log("no new actionable items");
     return;
@@ -195,6 +213,16 @@ async function main() {
         const msg = esc(String(t.last_client_msg).replace(/\s+/g, " ").slice(0, 160));
         out.push(`   “${msg}”`);
       }
+    }
+  }
+  if (newSignups.length) {
+    const typeLabel = { advogado: "Advogado", locadora: "Locadora", financeira: "Financeira" };
+    out.push("");
+    out.push(`👤 <b>Novo${newSignups.length > 1 ? "s" : ""} cliente${newSignups.length > 1 ? "s" : ""} cadastrado${newSignups.length > 1 ? "s" : ""} (${newSignups.length})</b>`);
+    for (const c of newSignups.slice(0, 10)) {
+      const name = esc(c.full_name || "(sem nome)");
+      const type = typeLabel[c.requestor_type] || c.requestor_type || "?";
+      out.push(`• ${name} · ${type} · ${ts(c.created_at)}`);
     }
   }
 
