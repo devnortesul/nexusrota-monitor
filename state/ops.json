@@ -3,11 +3,7 @@
   "orders_alerted": [],
   "tx_alerted": [],
   "wd_alerted": [],
-  "thread_alerted": [
-    "cfca5b07-2364-4aad-b92f-da31c1a6b406:0f30d486-6800-4eea-859f-bff74b1e3b71",
-    "4bf0b0a6-c981-4348-8ef2-464c96bb9a3e:d29512ac-03da-4c0a-b867-cfb53cd110cc",
-    "5c0fb7bb-7cdc-44cf-b5e6-cf0a43783b14:31599298-2b3a-4795-916d-ea6919b0d2a2"
-  ],
+  "thread_alerted": [],
   "client_alerted": [
     "666aed72-c4c5-4658-a969-fcd04fda67aa",
     "c45065e6-0241-4dea-baa6-a1e9dbe36d1e",
@@ -22,7 +18,7 @@
   ],
   "localizador_alerted": [
     "bd2d59b0-3f72-447a-a748-eb9fcff0d93e",
-    "df978d65-2678-494c-a50b-d18710c87cac",
-    "d889ee31-cf3b-42a4-ae8f-7bf7b1edef36"
+    "d889ee31-cf3b-42a4-ae8f-7bf7b1edef36",
+    "df978d65-2678-494c-a50b-d18710c87cac"
   ]
 }
