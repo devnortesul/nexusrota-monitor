@@ -9,12 +9,15 @@
 //   - State lives in ./state/ops.json inside the repo; the workflow commits it
 //     back only when the actionable sets actually change (no lastRun => no noise).
 //
-// Five signals:
+// Six signals:
 //   1. report_orders      -> order reached status='processing' (paid, produce report)
 //   2. wallet_transactions-> deposit pending manual confirmation (type=deposit, status=pending)
 //   3. withdrawal_requests-> withdrawal waiting to be processed (processed_at null, not closed)
 //   4. message_threads    -> client message unread for admin (unread_for_admin=true)
 //   5. profiles           -> new client signup (excludes admin/master/localizador accounts)
+//   6. localizadores      -> localizador completed onboarding (comarcas_atuacao filled in by
+//                            the localizador themselves after first login; phone alone doesn't
+//                            count, most invites already come with phone pre-filled)
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -65,7 +68,7 @@ async function main() {
   });
   await client.connect();
 
-  let orders, deposits, withdrawals, threads, newClients;
+  let orders, deposits, withdrawals, threads, newClients, newLocalizadores;
   try {
     orders = (
       await client.query(
@@ -119,6 +122,29 @@ async function main() {
          order by p.created_at desc`
       )
     ).rows;
+    newLocalizadores = (
+      await client.query(
+        `select l.id, l.nome, l.comarcas_atuacao, l.created_at,
+                case
+                  when exists (select 1 from public.admin_users au where au.user_id = lc.criado_por) then 'Plataforma'
+                  when exists (
+                    select 1 from public.user_roles ur
+                    where ur.user_id = lc.criado_por and ur.role in ('admin','master')
+                  ) then 'Plataforma'
+                  else coalesce(p.full_name, 'Cliente')
+                end as cadastrado_por
+         from public.localizadores l
+         left join lateral (
+           select criado_por from public.localizador_clientes
+           where localizador_id = l.id
+           order by created_at asc
+           limit 1
+         ) lc on true
+         left join public.profiles p on p.user_id = lc.criado_por
+         where l.comarcas_atuacao is not null and array_length(l.comarcas_atuacao, 1) > 0
+         order by l.created_at desc`
+      )
+    ).rows;
   } finally {
     await client.end().catch(() => {});
   }
@@ -134,6 +160,7 @@ async function main() {
   const curWd = withdrawals.map((w) => w.id);
   const curThr = threads.map(threadKey);
   const curClients = newClients.map((c) => c.id);
+  const curLocalizadores = newLocalizadores.map((l) => l.id);
 
   // First run: baseline everything, alert nothing.
   if (!state.initialized) {
@@ -144,6 +171,7 @@ async function main() {
       wd_alerted: curWd,
       thread_alerted: curThr,
       client_alerted: curClients,
+      localizador_alerted: curLocalizadores,
     });
     console.log("baseline established, no alert");
     return;
@@ -154,12 +182,14 @@ async function main() {
   const alertedWd = new Set(arr(state.wd_alerted));
   const alertedThr = new Set(arr(state.thread_alerted));
   const alertedClients = new Set(arr(state.client_alerted));
+  const alertedLocalizadores = new Set(arr(state.localizador_alerted));
 
   const newOrders = orders.filter((o) => !alertedOrders.has(o.id));
   const newDeposits = deposits.filter((d) => !alertedDep.has(d.id));
   const newWithdrawals = withdrawals.filter((w) => !alertedWd.has(w.id));
   const newThreads = threads.filter((t) => !alertedThr.has(threadKey(t)));
   const newSignups = newClients.filter((c) => !alertedClients.has(c.id));
+  const newLocalizadorProfiles = newLocalizadores.filter((l) => !alertedLocalizadores.has(l.id));
 
   // Persist updated state (current actionable sets). No lastRun -> file only
   // changes when a set changes, so the workflow commits only on real activity.
@@ -170,9 +200,10 @@ async function main() {
     wd_alerted: curWd,
     thread_alerted: curThr,
     client_alerted: curClients,
+    localizador_alerted: curLocalizadores,
   });
 
-  const total = newOrders.length + newDeposits.length + newWithdrawals.length + newThreads.length + newSignups.length;
+  const total = newOrders.length + newDeposits.length + newWithdrawals.length + newThreads.length + newSignups.length + newLocalizadorProfiles.length;
   if (total === 0) {
     console.log("no new actionable items");
     return;
@@ -223,6 +254,16 @@ async function main() {
       const name = esc(c.full_name || "(sem nome)");
       const type = typeLabel[c.requestor_type] || c.requestor_type || "?";
       out.push(`• ${name} · ${type} · ${ts(c.created_at)}`);
+    }
+  }
+  if (newLocalizadorProfiles.length) {
+    out.push("");
+    out.push(`🕵 <b>Localizador${newLocalizadorProfiles.length > 1 ? "es" : ""} completou cadastro (${newLocalizadorProfiles.length})</b>`);
+    for (const l of newLocalizadorProfiles.slice(0, 10)) {
+      const name = esc(l.nome || "(sem nome)");
+      const comarcas = esc(arr(l.comarcas_atuacao).slice(0, 3).join(", "));
+      out.push(`• ${name} · cadastrado por ${esc(l.cadastrado_por)} · ${ts(l.created_at)}`);
+      if (comarcas) out.push(`   ${comarcas}`);
     }
   }
 
