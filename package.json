@@ -6,9 +6,11 @@
   "description": "NexusRota operational + Vercel deploy monitors, running on GitHub Actions.",
   "scripts": {
     "ops": "node scripts/ops-monitor.mjs",
-    "vercel": "node scripts/vercel-monitor.mjs"
+    "vercel": "node scripts/vercel-monitor.mjs",
+    "report": "node scripts/analytics-report.mjs"
   },
   "dependencies": {
+    "pdfkit": "^0.15.1",
     "pg": "^8.13.1"
   }
 }

@@ -24,3 +24,29 @@ export async function sendTelegram(html) {
     throw new Error(`telegram sendMessage HTTP ${res.status}: ${body.slice(0, 300)}`);
   }
 }
+
+// Sends a file (e.g. the monthly PDF report) as a Telegram document.
+export async function sendTelegramDocument(buffer, filename, caption) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.TELEGRAM_CHAT_ID;
+  if (!token) throw new Error("TELEGRAM_BOT_TOKEN not set");
+  if (!chatId) throw new Error("TELEGRAM_CHAT_ID not set");
+
+  const form = new FormData();
+  form.append("chat_id", chatId);
+  if (caption) {
+    form.append("caption", caption);
+    form.append("parse_mode", "HTML");
+  }
+  form.append("document", new Blob([buffer], { type: "application/pdf" }), filename);
+
+  const res = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, {
+    method: "POST",
+    body: form,
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`telegram sendDocument HTTP ${res.status}: ${body.slice(0, 300)}`);
+  }
+}

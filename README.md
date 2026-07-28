@@ -17,6 +17,17 @@ podem atrasar sob carga).
 
 Cada item só alerta uma vez (dedupe por estado versionado em `state/`).
 
+## Relatório mensal de Analytics
+
+Workflow separado (`.github/workflows/monthly-analytics-report.yml`), roda só no
+dia 1 de cada mês (não faz parte do ciclo de 5 em 5 min acima). O script
+`scripts/analytics-report.mjs` busca o mês anterior inteiro no Vercel Web
+Analytics (projeto `nexusrota`), monta um PDF (`pdfkit`, só tabelas — sem
+headless browser) com visão geral, top páginas, países, referrer, dispositivo,
+navegador e SO, e envia como documento pro mesmo bot/chat do Telegram. Sem
+estado/dedupe — pode rodar de novo manualmente (`workflow_dispatch`) sem
+problema, só reenvia o mesmo relatório.
+
 ## Segredos (Settings → Secrets and variables → Actions)
 
 | Secret | Descrição |
