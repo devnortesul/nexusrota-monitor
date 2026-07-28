@@ -33,15 +33,15 @@ async function vercelQuery(token, path, params) {
   return json?.data ?? [];
 }
 
-// Mês calendário anterior por completo (UTC — mesma granularidade que a
-// Vercel usa pra bucketizar "day").
-function previousMonthRange(now = new Date()) {
-  const y = now.getUTCFullYear();
-  const m = now.getUTCMonth();
-  const since = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0));
-  const until = new Date(Date.UTC(y, m, 1, 0, 0, 0));
-  const label = since.toLocaleDateString("pt-BR", { month: "long", year: "numeric", timeZone: "UTC" });
-  return { since: since.toISOString(), until: until.toISOString(), label };
+// Últimos 30 dias corridos (não mês calendário) — o plano Hobby da Vercel só
+// permite consultar os últimos 31 dias de Web Analytics; um mês calendário
+// fechado (que pode ter 31 dias) rodando com qualquer atraso já estoura esse
+// limite e a API responde 400. 30 dias corridos até "agora" sempre cabe.
+function last30DaysRange(now = new Date()) {
+  const since = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const fmt = (d) => d.toLocaleDateString("pt-BR", { timeZone: "UTC" });
+  const label = `${fmt(since)} a ${fmt(now)}`;
+  return { since: since.toISOString(), until: now.toISOString(), label };
 }
 
 function sumMetric(rows, key) {
@@ -147,7 +147,7 @@ async function main() {
   const token = loadToken();
   if (!TEAM_ID) throw new Error("VERCEL_TEAM_ID not set");
 
-  const { since, until, label: monthLabel } = previousMonthRange();
+  const { since, until, label: monthLabel } = last30DaysRange();
   const range = { since, until };
 
   const [byDay, byRoute, byCountry, byReferrer, byDevice, byBrowser, byOS] = await Promise.all([
@@ -164,7 +164,7 @@ async function main() {
 
   const totalVisitors = sumMetric(byDay, "visitors");
   const totalViews = sumMetric(byDay, "views");
-  const filename = `nexusrota-analytics-${monthLabel.replace(/\s+/g, "-")}.pdf`;
+  const filename = `nexusrota-analytics-${until.slice(0, 10)}.pdf`;
   const caption = `📊 <b>Relatório de Analytics da LP — ${monthLabel}</b>\nVisitantes: ${totalVisitors} · Page views: ${totalViews}`;
 
   await sendTelegramDocument(pdf, filename, caption);
