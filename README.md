@@ -1,7 +1,7 @@
 # NexusRota Monitor (GitHub Actions)
 
 Alertas operacionais do NexusRota rodando 24/7 no GitHub Actions — funciona com o
-notebook do Marcelo desligado. Roda a cada ~5 min (mínimo do GitHub; execuções
+notebook local desligado. Roda a cada ~5 min (mínimo do GitHub; execuções
 podem atrasar sob carga).
 
 ## O que faz
