@@ -1,9 +1,10 @@
 name: NexusRota Monitors
 
 on:
-  schedule:
-    # GitHub's minimum granularity is 5 min (and runs can be delayed under load).
-    - cron: "*/5 * * * *"
+  # schedule temporariamente desligado p/ reescrita de histórico do git — reativar depois
+  # schedule:
+  #   # GitHub's minimum granularity is 5 min (and runs can be delayed under load).
+  #   - cron: "*/5 * * * *"
   workflow_dispatch: {} # allows manual "Run workflow" for testing
 
 concurrency:
