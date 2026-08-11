@@ -81,10 +81,11 @@ async function main() {
     ).rows;
     deposits = (
       await client.query(
-        `select id, amount, created_at, pix_txid
-         from public.wallet_transactions
-         where type = 'deposit' and status = 'pending'
-         order by created_at desc`
+        `select wt.id, wt.amount, wt.created_at, wt.pix_txid, p.full_name
+         from public.wallet_transactions wt
+         left join public.profiles p on p.user_id = wt.user_id
+         where wt.type = 'deposit' and wt.status = 'pending'
+         order by wt.created_at desc`
       )
     ).rows;
     withdrawals = (
@@ -223,7 +224,8 @@ async function main() {
     out.push("");
     out.push(`💰 <b>Depósito${newDeposits.length > 1 ? "s" : ""} p/ confirmar (${newDeposits.length})</b>`);
     for (const d of newDeposits.slice(0, 10)) {
-      out.push(`• ${brl(d.amount)} — pendente · ${ts(d.created_at)}`);
+      const name = esc(d.full_name || "(sem nome)");
+      out.push(`• ${name} — ${brl(d.amount)} · pendente · ${ts(d.created_at)}`);
     }
   }
   if (newWithdrawals.length) {
