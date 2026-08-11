@@ -7,6 +7,7 @@
   "wd_alerted": [],
   "thread_alerted": [],
   "client_alerted": [
+    "180c8633-53f8-482f-b432-cf14f7b7efba",
     "679c6b5b-644f-4206-9d5e-b4792431c26f",
     "5e255647-5fbf-410b-9687-f27773a5249b",
     "8c551a32-9eee-4658-a1f9-fb58039d1a1d",
@@ -25,5 +26,9 @@
     "bd2d59b0-3f72-447a-a748-eb9fcff0d93e",
     "d889ee31-cf3b-42a4-ae8f-7bf7b1edef36",
     "df978d65-2678-494c-a50b-d18710c87cac"
-  ]
+  ],
+  "cnpj_restricted_alerted": [
+    "79a5b211-6ee5-4762-964b-439621e976ef"
+  ],
+  "cnpj_mismatch_alerted": []
 }
