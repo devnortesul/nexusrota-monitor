@@ -3,7 +3,9 @@
   "orders_alerted": [
     "d6f297aa-9c14-4ca8-ae0a-6c066884fae0"
   ],
-  "tx_alerted": [],
+  "tx_alerted": [
+    "780c0e63-e0a8-4c08-85ba-8bc26f46c9a0"
+  ],
   "wd_alerted": [],
   "thread_alerted": [],
   "client_alerted": [
