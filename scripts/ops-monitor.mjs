@@ -9,7 +9,7 @@
 //   - State lives in ./state/ops.json inside the repo; the workflow commits it
 //     back only when the actionable sets actually change (no lastRun => no noise).
 //
-// Six signals:
+// Eight signals:
 //   1. report_orders      -> order reached status='processing' (paid, produce report)
 //   2. wallet_transactions-> deposit pending manual confirmation (type=deposit, status=pending)
 //   3. withdrawal_requests-> withdrawal waiting to be processed (processed_at null, not closed)
@@ -18,6 +18,11 @@
 //   6. localizadores      -> localizador completed onboarding (comarcas_atuacao filled in by
 //                            the localizador themselves after first login; phone alone doesn't
 //                            count, most invites already come with phone pre-filled)
+//   7. admin_activity_log -> signup attempt with a CNPJ from a partes_restritas group
+//                            (Bradesco/Omni non-compete contract) — hard refusal, no admin
+//                            review needed, but Marcelo wants to stay aware of attempts
+//   8. admin_activity_log -> signup attempt where declared razão social doesn't match the
+//                            CNPJ's official name at Receita Federal (typo or bad faith)
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -68,7 +73,7 @@ async function main() {
   });
   await client.connect();
 
-  let orders, deposits, withdrawals, threads, newClients, newLocalizadores;
+  let orders, deposits, withdrawals, threads, newClients, newLocalizadores, cnpjRestricted, cnpjMismatch;
   try {
     orders = (
       await client.query(
@@ -147,6 +152,24 @@ async function main() {
          order by l.created_at desc`
       )
     ).rows;
+    cnpjRestricted = (
+      await client.query(
+        `select a.id, a.metadata, a.created_at, p.full_name
+         from public.admin_activity_log a
+         left join public.profiles p on p.user_id = a.user_id
+         where a.action_type = 'cnpj_restricted_attempt'
+         order by a.created_at desc`
+      )
+    ).rows;
+    cnpjMismatch = (
+      await client.query(
+        `select a.id, a.metadata, a.created_at, p.full_name
+         from public.admin_activity_log a
+         left join public.profiles p on p.user_id = a.user_id
+         where a.action_type = 'cnpj_mismatch_attempt'
+         order by a.created_at desc`
+      )
+    ).rows;
   } finally {
     await client.end().catch(() => {});
   }
@@ -163,6 +186,8 @@ async function main() {
   const curThr = threads.map(threadKey);
   const curClients = newClients.map((c) => c.id);
   const curLocalizadores = newLocalizadores.map((l) => l.id);
+  const curCnpjRestricted = cnpjRestricted.map((r) => r.id);
+  const curCnpjMismatch = cnpjMismatch.map((m) => m.id);
 
   // First run: baseline everything, alert nothing.
   if (!state.initialized) {
@@ -174,6 +199,8 @@ async function main() {
       thread_alerted: curThr,
       client_alerted: curClients,
       localizador_alerted: curLocalizadores,
+      cnpj_restricted_alerted: curCnpjRestricted,
+      cnpj_mismatch_alerted: curCnpjMismatch,
     });
     console.log("baseline established, no alert");
     return;
@@ -185,6 +212,8 @@ async function main() {
   const alertedThr = new Set(arr(state.thread_alerted));
   const alertedClients = new Set(arr(state.client_alerted));
   const alertedLocalizadores = new Set(arr(state.localizador_alerted));
+  const alertedCnpjRestricted = new Set(arr(state.cnpj_restricted_alerted));
+  const alertedCnpjMismatch = new Set(arr(state.cnpj_mismatch_alerted));
 
   const newOrders = orders.filter((o) => !alertedOrders.has(o.id));
   const newDeposits = deposits.filter((d) => !alertedDep.has(d.id));
@@ -192,6 +221,8 @@ async function main() {
   const newThreads = threads.filter((t) => !alertedThr.has(threadKey(t)));
   const newSignups = newClients.filter((c) => !alertedClients.has(c.id));
   const newLocalizadorProfiles = newLocalizadores.filter((l) => !alertedLocalizadores.has(l.id));
+  const newCnpjRestricted = cnpjRestricted.filter((r) => !alertedCnpjRestricted.has(r.id));
+  const newCnpjMismatch = cnpjMismatch.filter((m) => !alertedCnpjMismatch.has(m.id));
 
   // Persist updated state (current actionable sets). No lastRun -> file only
   // changes when a set changes, so the workflow commits only on real activity.
@@ -203,9 +234,11 @@ async function main() {
     thread_alerted: curThr,
     client_alerted: curClients,
     localizador_alerted: curLocalizadores,
+    cnpj_restricted_alerted: curCnpjRestricted,
+    cnpj_mismatch_alerted: curCnpjMismatch,
   });
 
-  const total = newOrders.length + newDeposits.length + newWithdrawals.length + newThreads.length + newSignups.length + newLocalizadorProfiles.length;
+  const total = newOrders.length + newDeposits.length + newWithdrawals.length + newThreads.length + newSignups.length + newLocalizadorProfiles.length + newCnpjRestricted.length + newCnpjMismatch.length;
   if (total === 0) {
     console.log("no new actionable items");
     return;
@@ -268,6 +301,28 @@ async function main() {
       const comarcas = esc(arr(l.comarcas_atuacao).slice(0, 3).join(", "));
       out.push(`• ${name} · cadastrado por ${esc(l.cadastrado_por)} · ${ts(l.created_at)}`);
       if (comarcas) out.push(`   ${comarcas}`);
+    }
+  }
+  if (newCnpjRestricted.length) {
+    out.push("");
+    out.push(`🚫 <b>CNPJ restrito tentou se cadastrar (${newCnpjRestricted.length})</b>`);
+    for (const r of newCnpjRestricted.slice(0, 10)) {
+      const name = esc(r.full_name || "(sem nome)");
+      const cnpjRaw = String(r.metadata?.cnpj ?? "");
+      const cnpjFmt = esc(cnpjRaw.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, "$1.$2.$3/$4-$5"));
+      out.push(`• ${name} — CNPJ ${cnpjFmt} · ${ts(r.created_at)}`);
+    }
+  }
+  if (newCnpjMismatch.length) {
+    out.push("");
+    out.push(`⚠️ <b>Divergência de CNPJ no cadastro (${newCnpjMismatch.length})</b>`);
+    for (const m of newCnpjMismatch.slice(0, 10)) {
+      const name = esc(m.full_name || "(sem nome)");
+      const declarado = esc(String(m.metadata?.razao_declarada ?? "?"));
+      const oficial = esc(String(m.metadata?.razao_oficial ?? "?"));
+      out.push(`• ${name} · ${ts(m.created_at)}`);
+      out.push(`   Declarou: "${declarado}"`);
+      out.push(`   Oficial: "${oficial}"`);
     }
   }
 
