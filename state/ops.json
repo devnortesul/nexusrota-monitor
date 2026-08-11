@@ -1,16 +1,10 @@
 {
   "initialized": true,
-  "orders_alerted": [
-    "d6f297aa-9c14-4ca8-ae0a-6c066884fae0"
-  ],
+  "orders_alerted": [],
   "tx_alerted": [],
   "wd_alerted": [],
   "thread_alerted": [],
   "client_alerted": [
-    "180c8633-53f8-482f-b432-cf14f7b7efba",
-    "679c6b5b-644f-4206-9d5e-b4792431c26f",
-    "5e255647-5fbf-410b-9687-f27773a5249b",
-    "8c551a32-9eee-4658-a1f9-fb58039d1a1d",
     "ef8b9c26-21a0-413f-bbe0-204cf9a537ff",
     "4b3002f0-f25a-400e-9921-d256ad068275",
     "69f2680f-ee08-4a1b-9ed3-c0a790593496",
@@ -27,8 +21,6 @@
     "d889ee31-cf3b-42a4-ae8f-7bf7b1edef36",
     "df978d65-2678-494c-a50b-d18710c87cac"
   ],
-  "cnpj_restricted_alerted": [
-    "79a5b211-6ee5-4762-964b-439621e976ef"
-  ],
+  "cnpj_restricted_alerted": [],
   "cnpj_mismatch_alerted": []
 }
