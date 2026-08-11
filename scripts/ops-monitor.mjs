@@ -90,11 +90,12 @@ async function main() {
     ).rows;
     withdrawals = (
       await client.query(
-        `select id, amount, pix_key, status, requested_at
-         from public.withdrawal_requests
-         where processed_at is null
-           and lower(coalesce(status,'')) not in ('completed','cancelled','canceled','rejected','failed','done')
-         order by requested_at desc`
+        `select wr.id, wr.amount, wr.pix_key, wr.status, wr.requested_at, p.full_name
+         from public.withdrawal_requests wr
+         left join public.profiles p on p.user_id = wr.user_id
+         where wr.processed_at is null
+           and lower(coalesce(wr.status,'')) not in ('completed','cancelled','canceled','rejected','failed','done')
+         order by wr.requested_at desc`
       )
     ).rows;
     threads = (
@@ -232,7 +233,8 @@ async function main() {
     out.push("");
     out.push(`🏧 <b>Saque${newWithdrawals.length > 1 ? "s" : ""} p/ processar (${newWithdrawals.length})</b>`);
     for (const w of newWithdrawals.slice(0, 10)) {
-      out.push(`• ${brl(w.amount)} — ${w.status || "pendente"} · ${ts(w.requested_at)}`);
+      const name = esc(w.full_name || "(sem nome)");
+      out.push(`• ${name} — ${brl(w.amount)} · ${w.status || "pendente"} · ${ts(w.requested_at)}`);
     }
   }
   if (newThreads.length) {
