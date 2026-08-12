@@ -23,6 +23,8 @@
 //                            review needed, but Marcelo wants to stay aware of attempts
 //   8. admin_activity_log -> signup attempt where declared razão social doesn't match the
 //                            CNPJ's official name at Receita Federal (typo or bad faith)
+//   9. gestores_escritorio -> office manager account created by a client (excluded from
+//                            signal 5 — a gestor is an employee, not a new client)
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -73,7 +75,7 @@ async function main() {
   });
   await client.connect();
 
-  let orders, deposits, withdrawals, threads, newClients, newLocalizadores, cnpjRestricted, cnpjMismatch;
+  let orders, deposits, withdrawals, threads, newClients, newLocalizadores, cnpjRestricted, cnpjMismatch, newGestores;
   try {
     orders = (
       await client.query(
@@ -126,7 +128,18 @@ async function main() {
              select 1 from public.user_roles ur
              where ur.user_id = p.user_id and ur.role in ('admin','master','localizador')
            )
+           and not exists (
+             select 1 from public.gestores_escritorio g where g.user_id = p.user_id
+           )
          order by p.created_at desc`
+      )
+    ).rows;
+    newGestores = (
+      await client.query(
+        `select g.id, g.nome, g.created_at, coalesce(p.full_name, 'Cliente') as cadastrado_por
+         from public.gestores_escritorio g
+         left join public.profiles p on p.id = g.escritorio_profile_id
+         order by g.created_at desc`
       )
     ).rows;
     newLocalizadores = (
@@ -188,6 +201,7 @@ async function main() {
   const curLocalizadores = newLocalizadores.map((l) => l.id);
   const curCnpjRestricted = cnpjRestricted.map((r) => r.id);
   const curCnpjMismatch = cnpjMismatch.map((m) => m.id);
+  const curGestores = newGestores.map((g) => g.id);
 
   // First run: baseline everything, alert nothing.
   if (!state.initialized) {
@@ -201,6 +215,7 @@ async function main() {
       localizador_alerted: curLocalizadores,
       cnpj_restricted_alerted: curCnpjRestricted,
       cnpj_mismatch_alerted: curCnpjMismatch,
+      gestor_alerted: curGestores,
     });
     console.log("baseline established, no alert");
     return;
@@ -214,6 +229,7 @@ async function main() {
   const alertedLocalizadores = new Set(arr(state.localizador_alerted));
   const alertedCnpjRestricted = new Set(arr(state.cnpj_restricted_alerted));
   const alertedCnpjMismatch = new Set(arr(state.cnpj_mismatch_alerted));
+  const alertedGestores = new Set(arr(state.gestor_alerted));
 
   const newOrders = orders.filter((o) => !alertedOrders.has(o.id));
   const newDeposits = deposits.filter((d) => !alertedDep.has(d.id));
@@ -222,6 +238,7 @@ async function main() {
   const newSignups = newClients.filter((c) => !alertedClients.has(c.id));
   const newLocalizadorProfiles = newLocalizadores.filter((l) => !alertedLocalizadores.has(l.id));
   const newCnpjRestricted = cnpjRestricted.filter((r) => !alertedCnpjRestricted.has(r.id));
+  const newGestorSignups = newGestores.filter((g) => !alertedGestores.has(g.id));
   const newCnpjMismatch = cnpjMismatch.filter((m) => !alertedCnpjMismatch.has(m.id));
 
   // Persist updated state (current actionable sets). No lastRun -> file only
@@ -236,9 +253,10 @@ async function main() {
     localizador_alerted: curLocalizadores,
     cnpj_restricted_alerted: curCnpjRestricted,
     cnpj_mismatch_alerted: curCnpjMismatch,
+    gestor_alerted: curGestores,
   });
 
-  const total = newOrders.length + newDeposits.length + newWithdrawals.length + newThreads.length + newSignups.length + newLocalizadorProfiles.length + newCnpjRestricted.length + newCnpjMismatch.length;
+  const total = newOrders.length + newDeposits.length + newWithdrawals.length + newThreads.length + newSignups.length + newLocalizadorProfiles.length + newCnpjRestricted.length + newCnpjMismatch.length + newGestorSignups.length;
   if (total === 0) {
     console.log("no new actionable items");
     return;
@@ -291,6 +309,15 @@ async function main() {
       const name = esc(c.full_name || "(sem nome)");
       const type = typeLabel[c.requestor_type] || c.requestor_type || "?";
       out.push(`• ${name} · ${type} · ${ts(c.created_at)}`);
+    }
+  }
+  if (newGestorSignups.length) {
+    out.push("");
+    out.push(`🧑‍💼 <b>Novo${newGestorSignups.length > 1 ? "s" : ""} gestor${newGestorSignups.length > 1 ? "es" : ""} cadastrado${newGestorSignups.length > 1 ? "s" : ""} (${newGestorSignups.length})</b>`);
+    for (const g of newGestorSignups.slice(0, 10)) {
+      const name = esc(g.nome || "(sem nome)");
+      const cliente = esc(g.cadastrado_por);
+      out.push(`• Novo gestor cadastrado pelo cliente ${cliente}, de nome ${name} · ${ts(g.created_at)}`);
     }
   }
   if (newLocalizadorProfiles.length) {
