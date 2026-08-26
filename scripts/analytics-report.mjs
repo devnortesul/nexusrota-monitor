@@ -7,6 +7,7 @@
 // already used by vercel-monitor.mjs/ops-monitor.mjs.
 
 import PDFDocument from "pdfkit";
+import pg from "pg";
 import { sendTelegramDocument } from "./lib/telegram.mjs";
 
 const PROJECT = "nexusrota";
@@ -17,10 +18,47 @@ const NAVY = "#152238";
 const GOLD = "#b8902a";
 const MUTED = "#6b7280";
 
+// Limites fixos do plano Free do Supabase — não vêm de nenhuma API, são o
+// teto documentado do plano em si.
+const DB_LIMIT_BYTES = 500 * 1024 ** 2;
+const STORAGE_LIMIT_BYTES = 1024 ** 3;
+
 function loadToken() {
   const t = process.env.VERCEL_TOKEN;
   if (!t) throw new Error("VERCEL_TOKEN not set");
   return t;
+}
+
+function loadSupabaseConn() {
+  const c = process.env.SUPABASE_CONN;
+  if (!c) throw new Error("SUPABASE_CONN not set");
+  return c;
+}
+
+// Mesmo padrão de conexão do ops-monitor.mjs — timeouts curtos, sempre fecha
+// no finally, pra nunca deixar o job monthly preso numa conexão pendurada.
+async function fetchCapacity() {
+  const client = new pg.Client({
+    connectionString: loadSupabaseConn(),
+    ssl: { rejectUnauthorized: false },
+    connectionTimeoutMillis: 12000,
+    query_timeout: 12000,
+    statement_timeout: 12000,
+    keepAlive: true,
+  });
+  await client.connect();
+  try {
+    const dbSize = (await client.query(`select pg_database_size(current_database()) as bytes`)).rows[0].bytes;
+    const buckets = (
+      await client.query(
+        `select bucket_id, sum((metadata->>'size')::bigint) as bytes, count(*) as num_files
+         from storage.objects group by bucket_id order by bytes desc`
+      )
+    ).rows;
+    return { dbBytes: Number(dbSize), buckets };
+  } finally {
+    await client.end().catch(() => {});
+  }
 }
 
 async function vercelQuery(token, path, params) {
@@ -57,11 +95,47 @@ function metricKeys(rows, exclude) {
   return [...keys].sort((a, b) => order.indexOf(a) - order.indexOf(b) || a.localeCompare(b));
 }
 
-const METRIC_LABELS = { visitors: "Visitantes", views: "Page views" };
+const METRIC_LABELS = { visitors: "Visitantes", views: "Page views", num_files: "Arquivos" };
 const label = (k) => METRIC_LABELS[k] || k;
 
 function ensureSpace(doc, needed) {
   if (doc.y + needed > doc.page.height - doc.page.margins.bottom) doc.addPage();
+}
+
+function mb(bytes) {
+  return (bytes / 1024 ** 2).toLocaleString("pt-BR", { maximumFractionDigits: 1 });
+}
+
+function drawCapacitySection(doc, { dbBytes, buckets }) {
+  const fullWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+  const startX = doc.page.margins.left;
+
+  ensureSpace(doc, 80);
+  doc.moveDown(0.6);
+  doc.fontSize(12).fillColor(NAVY).font("Helvetica-Bold").text("Capacidade da infraestrutura (Supabase Free)", startX, doc.y, { width: fullWidth });
+  doc.moveDown(0.3);
+
+  const storageBytes = buckets.reduce((acc, b) => acc + Number(b.bytes || 0), 0);
+  const dbPct = ((dbBytes / DB_LIMIT_BYTES) * 100).toFixed(1);
+  const storagePct = ((storageBytes / STORAGE_LIMIT_BYTES) * 100).toFixed(1);
+
+  doc.fontSize(9).fillColor("#333").font("Helvetica");
+  doc.text(`Banco de dados: ${mb(dbBytes)} MB de 500 MB (${dbPct}%)`, startX, doc.y, { width: fullWidth });
+  doc.text(`Storage: ${mb(storageBytes)} MB de 1024 MB (${storagePct}%)`, startX, doc.y, { width: fullWidth });
+
+  drawTable(doc, {
+    title: "Storage por bucket",
+    dimensionLabel: "Bucket",
+    dimensionKey: "bucket_id",
+    exclude: ["bucket_id", "bytes"],
+    rows: buckets.map((b) => ({ bucket_id: b.bucket_id, num_files: Number(b.num_files), "MB": Number(mb(b.bytes).replace(",", ".")) })),
+  });
+
+  doc.moveDown(0.4);
+  doc.fontSize(8).fillColor(MUTED).font("Helvetica").text(
+    "Vercel: plano Hobby — upgrade para Pro previsto só quando entrar o primeiro cliente pagante (decisão registrada em docs/AMBIENTES-QA-PRD.md).",
+    startX, doc.y, { width: fullWidth }
+  );
 }
 
 function drawTable(doc, { title, dimensionLabel, dimensionKey, rows, exclude }) {
@@ -110,7 +184,7 @@ function drawTable(doc, { title, dimensionLabel, dimensionKey, rows, exclude }) 
   doc.y = y + 6;
 }
 
-export async function buildReport({ since, until, label: monthLabel, byDay, byRoute, byCountry, byReferrer, byDevice, byBrowser, byOS }) {
+export async function buildReport({ since, until, label: monthLabel, byDay, byRoute, byCountry, byReferrer, byDevice, byBrowser, byOS, capacity }) {
   const doc = new PDFDocument({ size: "A4", margin: 50, bufferPages: true });
   const chunks = [];
   doc.on("data", (c) => chunks.push(c));
@@ -139,6 +213,17 @@ export async function buildReport({ since, until, label: monthLabel, byDay, byRo
   drawTable(doc, { title: "Navegador", dimensionLabel: "Navegador", dimensionKey: "browserName", exclude: ["browserName"], rows: byBrowser });
   drawTable(doc, { title: "Sistema operacional", dimensionLabel: "SO", dimensionKey: "osName", exclude: ["osName"], rows: byOS });
 
+  if (capacity) {
+    drawCapacitySection(doc, capacity);
+  } else {
+    ensureSpace(doc, 40);
+    doc.moveDown(0.6);
+    doc.fontSize(9).fillColor(MUTED).font("Helvetica").text(
+      "Capacidade da infraestrutura: não foi possível obter os dados desta vez.",
+      doc.page.margins.left, doc.y, { width: doc.page.width - doc.page.margins.left - doc.page.margins.right }
+    );
+  }
+
   doc.end();
   return done;
 }
@@ -160,7 +245,14 @@ async function main() {
     vercelQuery(token, "/visits/aggregate", { ...range, by: "osName", limit: "10" }),
   ]);
 
-  const pdf = await buildReport({ since, until, label: monthLabel, byDay, byRoute, byCountry, byReferrer, byDevice, byBrowser, byOS });
+  let capacity = null;
+  try {
+    capacity = await fetchCapacity();
+  } catch (e) {
+    console.error(`capacity fetch failed, report will omit that section: ${e.message}`);
+  }
+
+  const pdf = await buildReport({ since, until, label: monthLabel, byDay, byRoute, byCountry, byReferrer, byDevice, byBrowser, byOS, capacity });
 
   const totalVisitors = sumMetric(byDay, "visitors");
   const totalViews = sumMetric(byDay, "views");
