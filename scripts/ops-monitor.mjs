@@ -9,7 +9,7 @@
 //   - State lives in ./state/ops.json inside the repo; the workflow commits it
 //     back only when the actionable sets actually change (no lastRun => no noise).
 //
-// Eight signals:
+// Ten signals:
 //   1. report_orders      -> order reached status='processing' (paid, produce report)
 //   2. wallet_transactions-> deposit pending manual confirmation (type=deposit, status=pending)
 //   3. withdrawal_requests-> withdrawal waiting to be processed (processed_at null, not closed)
@@ -25,6 +25,9 @@
 //                            CNPJ's official name at Receita Federal (typo or bad faith)
 //   9. gestores_escritorio -> office manager account created by a client (excluded from
 //                            signal 5 — a gestor is an employee, not a new client)
+//   10. contact_messages  -> public LP "Fale conosco" form submitted, unread (read=false) —
+//                            different from signal 4: this is an anonymous visitor, not a
+//                            logged-in client, and has no thread/account behind it
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -75,7 +78,7 @@ async function main() {
   });
   await client.connect();
 
-  let orders, deposits, withdrawals, threads, newClients, newLocalizadores, cnpjRestricted, cnpjMismatch, newGestores;
+  let orders, deposits, withdrawals, threads, newClients, newLocalizadores, cnpjRestricted, cnpjMismatch, newGestores, contactMessages;
   try {
     orders = (
       await client.query(
@@ -183,6 +186,14 @@ async function main() {
          order by a.created_at desc`
       )
     ).rows;
+    contactMessages = (
+      await client.query(
+        `select id, name, email, phone, oab, message, created_at
+         from public.contact_messages
+         where read = false
+         order by created_at desc`
+      )
+    ).rows;
   } finally {
     await client.end().catch(() => {});
   }
@@ -202,6 +213,7 @@ async function main() {
   const curCnpjRestricted = cnpjRestricted.map((r) => r.id);
   const curCnpjMismatch = cnpjMismatch.map((m) => m.id);
   const curGestores = newGestores.map((g) => g.id);
+  const curContactMessages = contactMessages.map((m) => m.id);
 
   // First run: baseline everything, alert nothing.
   if (!state.initialized) {
@@ -216,6 +228,7 @@ async function main() {
       cnpj_restricted_alerted: curCnpjRestricted,
       cnpj_mismatch_alerted: curCnpjMismatch,
       gestor_alerted: curGestores,
+      contact_message_alerted: curContactMessages,
     });
     console.log("baseline established, no alert");
     return;
@@ -230,6 +243,7 @@ async function main() {
   const alertedCnpjRestricted = new Set(arr(state.cnpj_restricted_alerted));
   const alertedCnpjMismatch = new Set(arr(state.cnpj_mismatch_alerted));
   const alertedGestores = new Set(arr(state.gestor_alerted));
+  const alertedContactMessages = new Set(arr(state.contact_message_alerted));
 
   const newOrders = orders.filter((o) => !alertedOrders.has(o.id));
   const newDeposits = deposits.filter((d) => !alertedDep.has(d.id));
@@ -240,6 +254,7 @@ async function main() {
   const newCnpjRestricted = cnpjRestricted.filter((r) => !alertedCnpjRestricted.has(r.id));
   const newGestorSignups = newGestores.filter((g) => !alertedGestores.has(g.id));
   const newCnpjMismatch = cnpjMismatch.filter((m) => !alertedCnpjMismatch.has(m.id));
+  const newContactMessages = contactMessages.filter((m) => !alertedContactMessages.has(m.id));
 
   // Persist updated state (current actionable sets). No lastRun -> file only
   // changes when a set changes, so the workflow commits only on real activity.
@@ -254,9 +269,10 @@ async function main() {
     cnpj_restricted_alerted: curCnpjRestricted,
     cnpj_mismatch_alerted: curCnpjMismatch,
     gestor_alerted: curGestores,
+    contact_message_alerted: curContactMessages,
   });
 
-  const total = newOrders.length + newDeposits.length + newWithdrawals.length + newThreads.length + newSignups.length + newLocalizadorProfiles.length + newCnpjRestricted.length + newCnpjMismatch.length + newGestorSignups.length;
+  const total = newOrders.length + newDeposits.length + newWithdrawals.length + newThreads.length + newSignups.length + newLocalizadorProfiles.length + newCnpjRestricted.length + newCnpjMismatch.length + newGestorSignups.length + newContactMessages.length;
   if (total === 0) {
     console.log("no new actionable items");
     return;
@@ -350,6 +366,21 @@ async function main() {
       out.push(`• ${name} · ${ts(m.created_at)}`);
       out.push(`   Declarou: "${declarado}"`);
       out.push(`   Oficial: "${oficial}"`);
+    }
+  }
+  if (newContactMessages.length) {
+    out.push("");
+    out.push(`📨 <b>Mensagem${newContactMessages.length > 1 ? "s" : ""} de contato da LP (${newContactMessages.length})</b>`);
+    for (const m of newContactMessages.slice(0, 10)) {
+      const name = esc(m.name || "(sem nome)");
+      const contactInfo = [m.email, m.phone].filter(Boolean).map(esc).join(" · ");
+      const oab = m.oab ? ` · OAB ${esc(m.oab)}` : "";
+      out.push(`• ${name}${oab} · ${ts(m.created_at)}`);
+      if (contactInfo) out.push(`   ${contactInfo}`);
+      if (m.message) {
+        const msg = esc(String(m.message).replace(/\s+/g, " ").slice(0, 160));
+        out.push(`   “${msg}”`);
+      }
     }
   }
 
