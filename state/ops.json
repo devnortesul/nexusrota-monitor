@@ -1,6 +1,8 @@
 {
   "initialized": true,
-  "orders_alerted": [],
+  "orders_alerted": [
+    "0b9df313-78e6-4cad-a28c-a59bd3480c82"
+  ],
   "tx_alerted": [],
   "wd_alerted": [],
   "thread_alerted": [],
@@ -26,6 +28,7 @@
   ],
   "cnpj_restricted_alerted": [],
   "cnpj_mismatch_alerted": [
+    "dd19b9bf-0c44-4612-b9b6-4ed3997a3ad6",
     "ca4809a1-1861-4b4d-b4b1-aced75a864a2",
     "31216bc3-2a18-4dcb-a706-21a891e4122e",
     "6bbcd0f6-c59a-4afe-b341-6caa9d471ae6",
