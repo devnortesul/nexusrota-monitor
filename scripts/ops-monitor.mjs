@@ -9,7 +9,7 @@
 //   - State lives in ./state/ops.json inside the repo; the workflow commits it
 //     back only when the actionable sets actually change (no lastRun => no noise).
 //
-// Ten signals:
+// Eleven signals:
 //   1. report_orders      -> order reached status='processing' (paid, produce report)
 //   2. wallet_transactions-> deposit pending manual confirmation (type=deposit, status=pending)
 //   3. withdrawal_requests-> withdrawal waiting to be processed (processed_at null, not closed)
@@ -28,6 +28,11 @@
 //   10. contact_messages  -> public LP "Fale conosco" form submitted, unread (read=false) —
 //                            different from signal 4: this is an anonymous visitor, not a
 //                            logged-in client, and has no thread/account behind it
+//   11. profiles          -> signup started but not finished 24h later (terms_accepted_at is
+//                            null: the terms gate comes last, after e-mail code and profile, so
+//                            it catches an abandonment at any of the three steps). Test accounts
+//                            are excluded. Which step it stopped at is not readable by this role
+//                            (auth schema) — the Admin "Clientes" tab shows it.
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -78,7 +83,7 @@ async function main() {
   });
   await client.connect();
 
-  let orders, deposits, withdrawals, threads, newClients, newLocalizadores, cnpjRestricted, cnpjMismatch, newGestores, contactMessages;
+  let orders, deposits, withdrawals, threads, newClients, newLocalizadores, cnpjRestricted, cnpjMismatch, newGestores, contactMessages, abandonedSignups;
   try {
     orders = (
       await client.query(
@@ -194,6 +199,24 @@ async function main() {
          order by created_at desc`
       )
     ).rows;
+    abandonedSignups = (
+      await client.query(
+        `select p.id, p.full_name, p.requestor_type::text as requestor_type, p.created_at
+         from public.profiles p
+         where p.terms_accepted_at is null
+           and p.is_test_account = false
+           and p.created_at < now() - interval '24 hours'
+           and not exists (select 1 from public.admin_users au where au.user_id = p.user_id)
+           and not exists (
+             select 1 from public.user_roles ur
+             where ur.user_id = p.user_id and ur.role in ('admin','master','localizador')
+           )
+           and not exists (
+             select 1 from public.gestores_escritorio g where g.user_id = p.user_id
+           )
+         order by p.created_at desc`
+      )
+    ).rows;
   } finally {
     await client.end().catch(() => {});
   }
@@ -214,6 +237,7 @@ async function main() {
   const curCnpjMismatch = cnpjMismatch.map((m) => m.id);
   const curGestores = newGestores.map((g) => g.id);
   const curContactMessages = contactMessages.map((m) => m.id);
+  const curAbandoned = abandonedSignups.map((c) => c.id);
 
   // First run: baseline everything, alert nothing.
   if (!state.initialized) {
@@ -229,6 +253,7 @@ async function main() {
       cnpj_mismatch_alerted: curCnpjMismatch,
       gestor_alerted: curGestores,
       contact_message_alerted: curContactMessages,
+      abandoned_alerted: curAbandoned,
     });
     console.log("baseline established, no alert");
     return;
@@ -244,6 +269,7 @@ async function main() {
   const alertedCnpjMismatch = new Set(arr(state.cnpj_mismatch_alerted));
   const alertedGestores = new Set(arr(state.gestor_alerted));
   const alertedContactMessages = new Set(arr(state.contact_message_alerted));
+  const alertedAbandoned = new Set(arr(state.abandoned_alerted));
 
   const newOrders = orders.filter((o) => !alertedOrders.has(o.id));
   const newDeposits = deposits.filter((d) => !alertedDep.has(d.id));
@@ -255,6 +281,7 @@ async function main() {
   const newGestorSignups = newGestores.filter((g) => !alertedGestores.has(g.id));
   const newCnpjMismatch = cnpjMismatch.filter((m) => !alertedCnpjMismatch.has(m.id));
   const newContactMessages = contactMessages.filter((m) => !alertedContactMessages.has(m.id));
+  const newAbandoned = abandonedSignups.filter((c) => !alertedAbandoned.has(c.id));
 
   // Persist updated state (current actionable sets). No lastRun -> file only
   // changes when a set changes, so the workflow commits only on real activity.
@@ -270,9 +297,10 @@ async function main() {
     cnpj_mismatch_alerted: curCnpjMismatch,
     gestor_alerted: curGestores,
     contact_message_alerted: curContactMessages,
+    abandoned_alerted: curAbandoned,
   });
 
-  const total = newOrders.length + newDeposits.length + newWithdrawals.length + newThreads.length + newSignups.length + newLocalizadorProfiles.length + newCnpjRestricted.length + newCnpjMismatch.length + newGestorSignups.length + newContactMessages.length;
+  const total = newOrders.length + newDeposits.length + newWithdrawals.length + newThreads.length + newSignups.length + newLocalizadorProfiles.length + newCnpjRestricted.length + newCnpjMismatch.length + newGestorSignups.length + newContactMessages.length + newAbandoned.length;
   if (total === 0) {
     console.log("no new actionable items");
     return;
@@ -382,6 +410,18 @@ async function main() {
         out.push(`   “${msg}”`);
       }
     }
+  }
+
+  if (newAbandoned.length) {
+    const typeLabel = { advogado: "Advogado", locadora: "Locadora", financeira: "Financeira" };
+    out.push("");
+    out.push(`⏳ <b>Cadastro não concluído há mais de 24h (${newAbandoned.length})</b>`);
+    for (const c of newAbandoned.slice(0, 10)) {
+      const name = esc(c.full_name || "(sem nome)");
+      const type = typeLabel[c.requestor_type] || c.requestor_type || "?";
+      out.push(`• ${name} · ${type} · cadastrou-se em ${ts(c.created_at)}`);
+    }
+    out.push("   Ver a etapa: Admin → Clientes → “Só cadastros em aberto”");
   }
 
   await sendTelegram(out.join("\n"));
