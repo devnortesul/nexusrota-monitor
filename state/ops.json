@@ -1,7 +1,9 @@
 {
   "initialized": true,
   "orders_alerted": [],
-  "tx_alerted": [],
+  "tx_alerted": [
+    "883ca43a-3faa-429d-9495-506e964fffa8"
+  ],
   "wd_alerted": [],
   "thread_alerted": [],
   "client_alerted": [
